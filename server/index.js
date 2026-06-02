@@ -53,7 +53,7 @@ app.use(helmet({
   }
 }))
 app.use(cors({ origin: /^http:\/\/localhost(:\d{1,5})?$/, methods: ['GET'], credentials: false }))
-app.use(express.json())
+
 
 // ── Simple in-memory cache (60s TTL) ─────────────────────────────────────────
 const cache = {}
@@ -345,22 +345,13 @@ app.get('/api/stats', (_req, res) => {
         tokens: s.tokens,
       }))
 
-    // Agents derived from model usage
+    // Agents derived from real token data only
     const agents = [
-      { id: 'sonnet-main', name: 'Claude Sonnet', role: 'Primary workhorse', status: 'active', model: 'claude-sonnet-4-6', tasksToday: todaySessions, tokensToday: todayRow.sonnet, uptime: '100%', glyph: '✻', note: 'Coding, writing, research, design' },
-      { id: 'opus-planner', name: 'Claude Opus', role: 'Deep reasoning', status: totalOpus > 0 ? 'idle' : 'idle', model: 'claude-opus-4-8', tasksToday: 0, tokensToday: totalOpus, uptime: '100%', glyph: '◆', note: totalOpus > 0 ? `${(totalOpus / 1e6).toFixed(1)}M tokens used` : 'Not used yet' },
-      { id: 'code-worker', name: 'Code Worker', role: 'File & shell ops', status: 'active', model: 'claude-sonnet-4-6', tasksToday: 0, tokensToday: 0, uptime: '100%', glyph: '⟓', note: 'Bash · Edit · Read · Write' },
-      { id: 'researcher',  name: 'Researcher',   role: 'Web research',    status: 'idle',   model: 'claude-sonnet-4-6', tasksToday: 0, tokensToday: 0, uptime: '100%', glyph: '◎', note: 'WebSearch · WebFetch' },
-      { id: 'subagents',   name: 'Sub-agents',   role: 'Spawned workers', status: 'idle',   model: 'claude-sonnet-4-6', tasksToday: 0, tokensToday: 0, uptime: '100%', glyph: '◈', note: 'Via Agent tool' },
-      { id: 'wf-engine',   name: 'Workflows',    role: 'Multi-agent harness', status: 'idle', model: 'claude-sonnet-4-6', tasksToday: 0, tokensToday: 0, uptime: '100%', glyph: '⟿', note: 'Via Workflow tool' },
+      { id: 'sonnet-main', name: 'Claude Sonnet', role: 'Primary workhorse', status: todaySessions > 0 ? 'active' : 'idle', model: 'claude-sonnet-4-6', tasksToday: todaySessions, tokensToday: todayRow.sonnet, uptime: '100%', glyph: '✻', note: 'Coding, writing, research, design' },
+      { id: 'opus-planner', name: 'Claude Opus', role: 'Deep reasoning', status: totalOpus > 0 ? 'active' : 'idle', model: 'claude-opus-4-8', tasksToday: 0, tokensToday: totalOpus, uptime: '100%', glyph: '◆', note: totalOpus > 0 ? `${(totalOpus / 1e6).toFixed(1)}M tokens used` : 'Not used yet' },
     ]
 
-    const schedules = [
-      { id: 's1', name: 'AI Changelog Publish', cron: 'on demand', next: 'next AI release', every: 'manual', on: true },
-      { id: 's2', name: 'CVE Triage', cron: 'Gemfile change', next: 'on next PR', every: 'webhook', on: true },
-      { id: 's3', name: 'Deep Research', cron: 'on demand', next: 'on demand', every: 'manual', on: true },
-      { id: 's4', name: 'Code Review', cron: 'on demand', next: 'on demand', every: 'manual', on: true },
-    ]
+    const schedules = []
 
     return { days, usageSeries, models, agents, tasks, schedules, todayTokens, todaySessions, totalCost }
   })

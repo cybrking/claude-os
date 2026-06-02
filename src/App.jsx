@@ -1,4 +1,4 @@
-import { useState, useEffect, Component } from 'react'
+import { useState, Component } from 'react'
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -19,7 +19,7 @@ class ErrorBoundary extends Component {
   }
 }
 import { useData } from './hooks/useData.js'
-import { Dot, fmt } from './components/ui.jsx'
+import { Dot } from './components/ui.jsx'
 import { Overview } from './components/Overview.jsx'
 import { AgentsView } from './views/AgentsView.jsx'
 import { SkillsView } from './views/SkillsView.jsx'
@@ -41,69 +41,6 @@ const NAV = [
   { id: 'connections', label: 'Connections',  glyph: '⊕' },
   { id: 'schedules',   label: 'Schedules',    glyph: '◷' },
 ]
-
-const FEED_TEMPLATES = [
-  { agent: 'Claude Sonnet', text: 'writing Bash tool call', status: 'running' },
-  { agent: 'Workflow',      text: 'deep-research: scoping search angles', status: 'running' },
-  { agent: 'Claude Sonnet', text: 'edited file via Edit tool', status: 'done' },
-  { agent: 'Composio',      text: 'REMOTE_WORKBENCH executed', status: 'done' },
-  { agent: 'Sub-agent',     text: 'adversarially verifying claim', status: 'running' },
-  { agent: 'Claude Sonnet', text: 'read file via Read tool', status: 'done' },
-  { agent: 'Workflow',      text: 'cve-triage: notifying via Slack', status: 'done' },
-  { agent: 'Claude Sonnet', text: 'fetched source via WebFetch', status: 'running' },
-  { agent: 'Sub-agent',     text: 'synthesizing research report', status: 'done' },
-  { agent: 'Workflow',      text: 'ai-changelog: rendering Remotion video', status: 'done' },
-]
-
-function nowTime() {
-  return new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
-}
-
-function useLive(data) {
-  const seedFeed = () => Array.from({ length: 7 }, (_, i) => {
-    const t = FEED_TEMPLATES[i % FEED_TEMPLATES.length]
-    return { ...t, time: nowTime(), key: 'f' + i }
-  })
-
-  const [state, setState] = useState({
-    tokensN: 0, tasksDone: 0, running: 1, rpm: 12, queue: 0,
-    costRate: 0.09, feed: seedFeed(), keyN: 100,
-  })
-
-  // Seed from real data once it arrives
-  useEffect(() => {
-    if (data?.todayTokens) {
-      setState(s => ({ ...s, tokensN: data.todayTokens, tasksDone: data.todaySessions || s.tasksDone }))
-    }
-  }, [data?.todayTokens])
-
-  useEffect(() => {
-    const tick = setInterval(() => {
-      setState(s => {
-        const addFeed = Math.random() < 0.55
-        let feed = s.feed, keyN = s.keyN
-        if (addFeed) {
-          const t = FEED_TEMPLATES[Math.floor(Math.random() * FEED_TEMPLATES.length)]
-          feed = [{ ...t, time: nowTime(), key: 'f' + keyN }, ...s.feed].slice(0, 7)
-          keyN++
-        }
-        return {
-          ...s,
-          tokensN: s.tokensN + Math.floor(Math.random() * 4000 + 500),
-          tasksDone: s.tasksDone + (Math.random() < 0.06 ? 1 : 0),
-          running: Math.max(0, Math.min(3, s.running + (Math.random() < 0.5 ? -1 : 1) * (Math.random() < 0.15 ? 1 : 0))),
-          rpm: Math.max(4, Math.min(24, s.rpm + Math.floor((Math.random() - 0.5) * 4))),
-          queue: Math.max(0, Math.min(3, s.queue + (Math.random() < 0.5 ? -1 : 1) * (Math.random() < 0.2 ? 1 : 0))),
-          costRate: Math.max(0.02, Math.min(0.48, +(s.costRate + (Math.random() - 0.5) * 0.03).toFixed(2))),
-          feed, keyN,
-        }
-      })
-    }, 2200)
-    return () => clearInterval(tick)
-  }, [])
-
-  return { ...state, tokens: fmt.tok(state.tokensN) }
-}
 
 function Sidebar({ route, setRoute, data }) {
   const skillCount = data?.skills?.length || 0
@@ -136,7 +73,7 @@ function Sidebar({ route, setRoute, data }) {
   )
 }
 
-function Topbar({ route, live }) {
+function Topbar({ route }) {
   const title = (NAV.find(n => n.id === route) || NAV[0]).label
   const hour = new Date().getHours()
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
@@ -149,7 +86,6 @@ function Topbar({ route, live }) {
       </div>
       <div className="topbar-right">
         <div className="search"><span>⌕</span><input placeholder="Search agents, skills, runs…" /></div>
-        <div className="topbar-stat"><span className="tiny muted">burn</span><b className="mono">{fmt.usd2(live.costRate)}/min</b></div>
         <button className="icon-btn" title="Notifications">◔</button>
       </div>
     </header>
@@ -159,7 +95,6 @@ function Topbar({ route, live }) {
 export default function App() {
   const [route, setRoute] = useState('overview')
   const { data, loading, error } = useData()
-  const live = useLive(data)
 
   if (loading && !data) {
     return (
@@ -176,18 +111,18 @@ export default function App() {
     case 'skills':      body = <SkillsView data={data} />; break
     case 'workflows':   body = <WorkflowsView data={data} />; break
     case 'tasks':       body = <TasksView data={data} />; break
-    case 'usage':       body = <UsageView live={live} data={data} />; break
+    case 'usage':       body = <UsageView data={data} />; break
     case 'memory':      body = <MemoryView data={data} />; break
     case 'connections': body = <ConnectionsView data={data} />; break
     case 'schedules':   body = <SchedulesView data={data} />; break
-    default:            body = <Overview live={live} data={data} />
+    default:            body = <Overview data={data} />
   }
 
   return (
     <div className="app">
       <Sidebar route={route} setRoute={setRoute} data={data} />
       <main className="main">
-        <Topbar route={route} live={live} />
+        <Topbar route={route} />
         {error && !data && (
           <div style={{ padding: '8px 30px', background: 'color-mix(in oklab, var(--amber) 12%, transparent)', borderBottom: '1px solid color-mix(in oklab, var(--amber) 30%, transparent)', fontSize: '12px', color: 'var(--amber)', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span>⚠</span> API error — is the server running? <span className="mono">{error}</span>

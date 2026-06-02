@@ -1,5 +1,5 @@
 import React from 'react'
-import { Card, Dot, Pill, Sparkline, StackedBars, Bar, Glyph, Donut, fmt } from './ui.jsx'
+import { Card, Dot, Pill, Sparkline, StackedBars, Bar, Glyph, fmt } from './ui.jsx'
 
 export function KPI({ label, value, unit, sub, spark, color = 'var(--clay)' }) {
   return (
@@ -50,7 +50,6 @@ export function WorkflowRow({ w }) {
         </div>
       </div>
       <div className="row-side">
-        <span className="tiny muted">{w.runs} runs · {w.success}%</span>
         <span className="tiny muted">{w.schedule}</span>
       </div>
     </div>
@@ -105,112 +104,55 @@ export function MemoryWidget({ memory }) {
   const count = memory?.count || entries.length
   return (
     <div className="mem">
-      <div className="mem-top">
-        <Donut size={108} stroke={13} segments={[
-          { value: Math.max(count, 1), color: 'var(--clay)' },
-          { value: Math.max(1, Math.floor(count * 0.4)), color: 'var(--c-sonnet)' },
-          { value: 1, color: 'var(--line2)' },
-        ]} />
-        <div className="mem-center"><b>{count}</b><span className="tiny muted">memories</span></div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 12 }}>
+        <b style={{ fontSize: '2rem', lineHeight: 1 }}>{count}</b>
+        <span className="tiny muted">memories</span>
       </div>
-      <div className="mem-legend">
-        {entries.slice(0, 2).map((e, i) => (
-          <div key={i}><span className="sw" style={{ background: i === 0 ? 'var(--clay)' : 'var(--c-sonnet)' }} />{e.type} <b className="mono">{e.name}</b></div>
-        ))}
-        <div><span className="sw" style={{ background: 'var(--line2)' }} />Available <b className="mono">—</b></div>
-      </div>
-      <div className="mem-foot tiny muted">File-based memory · ~/.claude/projects/…/memory/</div>
-    </div>
-  )
-}
-
-function EKG() {
-  const d = 'M0,30 L40,30 L48,30 L54,12 L62,48 L70,30 L96,30 L104,22 L112,38 L120,30 L160,30 L168,30 L174,14 L182,46 L190,30 L240,30'
-  return (
-    <svg viewBox="0 0 240 60" className="ekg" preserveAspectRatio="none">
-      <path d={d} fill="none" stroke="var(--clay-soft)" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-      <path className="ekg-path" d={d} fill="none" stroke="var(--clay)" strokeWidth="2.2" strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-export function Heartbeat({ live, models }) {
-  return (
-    <div className="pulse-wrap">
-      <div className="pulse-ekg"><EKG /></div>
-      <div className="pulse-stats">
-        <div className="pulse-stat"><span className="muted tiny">Req / min</span><b className="mono">{live.rpm}</b></div>
-        <div className="pulse-stat"><span className="muted tiny">Avg latency</span><b className="mono">1.4s</b></div>
-        <div className="pulse-stat"><span className="muted tiny">Queue depth</span><b className="mono">{live.queue}</b></div>
-        <div className="pulse-stat"><span className="muted tiny">Error rate</span><b className="mono" style={{ color: 'var(--amber)' }}>0.6%</b></div>
-      </div>
-      <div className="pulse-models">
-        {models.map(m => (
-          <div key={m.id} className="pulse-model">
-            <span className="sw" style={{ background: m.color }} />
-            <span className="tiny">{m.name}</span>
-            <span className="tiny muted mono">{m.share}%</span>
+      <div className="list">
+        {entries.slice(0, 5).map((e, i) => (
+          <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--line)' }}>
+            <div className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{e.name}</div>
+            {e.desc && <div className="tiny muted" style={{ marginTop: 2, lineHeight: 1.4 }}>{e.desc.slice(0, 90)}</div>}
           </div>
         ))}
+        {count > 5 && <div className="tiny muted" style={{ marginTop: 6 }}>+{count - 5} more</div>}
       </div>
+      <div className="mem-foot tiny muted" style={{ marginTop: 10 }}>~/.claude/projects/…/memory/</div>
     </div>
   )
 }
 
-export function ActivityFeed({ feed }) {
-  return (
-    <div className="feed">
-      {feed.map((f, i) => (
-        <div key={f.key} className="feed-item" style={{ opacity: i === 0 ? 1 : 1 - i * 0.04 }}>
-          <span className="feed-time mono tiny">{f.time}</span>
-          <Dot status={f.status} size={6} />
-          <span className="feed-text"><b>{f.agent}</b> {f.text}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-export function Overview({ live, data }) {
-  const { agents, skills, workflows, tasks, connections, schedules, days, usageSeries, models, memory, spark, totalCost } = data
-  const topSkills = [...skills].sort((a, b) => b.invocations - a.invocations).slice(0, 5)
+export function Overview({ data }) {
+  const { agents, skills, workflows, tasks, connections, schedules, days, usageSeries, models, memory, spark, totalCost, todayTokens, todaySessions } = data
   const activeAgents = agents.filter(a => a.status === 'active').length
+  const totalMtok = usageSeries.reduce((s, d) => s + (d.sonnet || 0) + (d.opus || 0) + (d.haiku || 0), 0)
 
   return (
     <div className="view">
       <div className="kpi-strip">
-        <KPI label="Tokens today" value={live.tokens} unit=" tok" sub="Sonnet 4.6 dominant" spark={spark(3)} />
-        <KPI label="Spend · all time" value={fmt.usd(totalCost)} sub={`${fmt.usd2(live.costRate)}/min now`} spark={spark(7)} color="var(--c-sonnet)" />
+        <KPI label="Tokens today" value={fmt.tok(todayTokens || 0)} unit=" tok" sub="Sonnet 4.6 dominant" spark={spark(3)} />
+        <KPI label="Tokens · 14 days" value={totalMtok.toFixed(1)} unit="M" sub={`API equiv ${fmt.usd(totalCost)} (not your bill)`} spark={spark(7)} color="var(--c-sonnet)" />
         <KPI label="Active contexts" value={`${activeAgents}`} unit={` / ${agents.length}`} sub={`${agents.length - activeAgents} idle`} spark={spark(5)} color="var(--ok)" />
-        <KPI label="Sessions today" value={live.tasksDone} sub={`${live.running} running now`} spark={spark(9)} color="var(--slate)" />
+        <KPI label="Sessions today" value={todaySessions || 0} spark={spark(9)} color="var(--slate)" />
       </div>
 
-      <div className="grid g-82">
-        <Card title="Token usage" sub="Last 14 days · stacked by model" action={<Legend models={models} />}>
-          <StackedBars series={usageSeries} labels={days} models={models} h={210} />
-        </Card>
-        <Card title="System pulse" sub="Live">
-          <Heartbeat live={live} models={models} />
-        </Card>
-      </div>
+      <Card title="Token usage" sub="Last 14 days · stacked by model" action={<Legend models={models} />}>
+        <StackedBars series={usageSeries} labels={days} models={models} h={210} />
+      </Card>
 
-      <div className="grid g-3">
-        <Card title="Live activity" sub="Streaming" action={<span className="live-tag"><Dot status="active" size={6} /> live</span>}>
-          <ActivityFeed feed={live.feed} />
-        </Card>
+      <div className="grid g-2">
         <Card title="Agents" sub={`${agents.length} in roster`} action={<a className="link">Manage</a>}>
           <div className="list tight">{agents.slice(0, 5).map(a => <AgentRow key={a.id} a={a} />)}</div>
         </Card>
-        <Card title="Top skills" sub="By invocations" action={<a className="link">Library</a>}>
+        <Card title="Skills" sub={`${skills.length} installed`} action={<a className="link">Library</a>}>
           <div className="list">
-            {topSkills.map(s => (
+            {skills.slice(0, 5).map(s => (
               <div key={s.id} className="skill-mini">
                 <div className="skill-mini-top">
                   <span className="mono">{s.name}</span>
-                  <span className="tiny muted">{s.invocations.toLocaleString()}</span>
+                  <span className="tiny muted">{s.owner}</span>
                 </div>
-                <Bar value={Math.min(100, s.invocations / Math.max(...topSkills.map(x => x.invocations)) * 100)} color="var(--clay)" />
-                <div className="tiny muted">{s.success}% success</div>
+                {s.desc && <div className="tiny muted" style={{ marginTop: 2, lineHeight: 1.4 }}>{s.desc.slice(0, 80)}</div>}
               </div>
             ))}
           </div>
@@ -231,9 +173,12 @@ export function Overview({ live, data }) {
           <div className="conn-grid">{connections.map(c => <ConnChip key={c.id} c={c} />)}</div>
         </Card>
         <Card title="Schedules" sub="Heartbeats & cron">
-          <div className="list tight">{schedules.slice(0, 5).map(s => <SchedRow key={s.id} s={s} />)}</div>
+          <div className="list tight">{schedules.length
+            ? schedules.slice(0, 5).map(s => <SchedRow key={s.id} s={s} />)
+            : <div className="tiny muted" style={{ padding: '16px 0' }}>No schedules configured</div>
+          }</div>
         </Card>
-        <Card title="Memory & context">
+        <Card title="Memory">
           <MemoryWidget memory={memory} />
         </Card>
       </div>
