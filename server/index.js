@@ -1,21 +1,55 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
-import { createReadStream, readdirSync, readFileSync, existsSync } from 'fs'
-import { join } from 'path'
+import { createReadStream, readdirSync, readFileSync, existsSync, statSync } from 'fs'
+import { join, resolve, basename } from 'path'
 import { homedir } from 'os'
 import { createInterface } from 'readline'
 import { fileURLToPath } from 'url'
 import { dirname } from 'path'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const CLAUDE_DIR = process.env.CLAUDE_DIR || join(homedir(), '.claude')
+
+// ── Validate CLAUDE_DIR to prevent path traversal via env var ─────────────────
+function resolveClaudeDir(raw) {
+  const abs = resolve(raw)
+  const home = homedir()
+  if (!abs.startsWith(home)) {
+    console.error(`CLAUDE_DIR must be within home directory. Got: ${abs}`)
+    process.exit(1)
+  }
+  return abs
+}
+const CLAUDE_DIR = resolveClaudeDir(process.env.CLAUDE_DIR || join(homedir(), '.claude'))
+
 const PORT = process.env.PORT || 3001
 const isProd = process.env.NODE_ENV === 'production'
 
+// ── Limits ────────────────────────────────────────────────────────────────────
+const MAX_FILE_BYTES  = 50 * 1024 * 1024   // 50 MB per JSONL file
+const MAX_LINES_FILE  = 500_000            // lines per file
+const MAX_LINES_TOTAL = 2_000_000          // lines across all files
+
+// ── Safe directory name guard (prevents traversal via crafted dir names) ───────
+function isSafeName(name) {
+  return !name.includes('..') && !name.includes('/') && !name.includes('\\') && !name.startsWith('.')
+}
+
 const app = express()
-app.use(helmet({ contentSecurityPolicy: false })) // CSP disabled — inline SVG favicon
-app.use(cors({ origin: [/^http:\/\/localhost(:\d+)?$/] })) // localhost only
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],   // React uses inline styles
+      imgSrc: ["'self'", "data:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      frameAncestors: ["'none'"],
+    }
+  }
+}))
+app.use(cors({ origin: /^http:\/\/localhost(:\d{1,5})?$/, methods: ['GET'], credentials: false }))
 app.use(express.json())
 
 // ── Simple in-memory cache (60s TTL) ─────────────────────────────────────────
@@ -64,7 +98,7 @@ app.get('/api/skills', (_req, res) => {
     const skillsDir = join(CLAUDE_DIR, 'skills')
     if (!existsSync(skillsDir)) return []
     const dirs = readdirSync(skillsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
+      .filter(d => d.isDirectory() && isSafeName(d.name))
       .map(d => d.name)
 
     return dirs.map((name, i) => {
@@ -92,7 +126,7 @@ app.get('/api/workflows', (_req, res) => {
   const data = cached('workflows', 60_000, async () => {
     const wfDir = join(CLAUDE_DIR, 'workflows')
     if (!existsSync(wfDir)) return []
-    const files = readdirSync(wfDir).filter(f => f.endsWith('.js'))
+    const files = readdirSync(wfDir).filter(f => f.endsWith('.js') && isSafeName(f))
 
     return files.map((file, i) => {
       const src = safeRead(join(wfDir, file))
@@ -153,7 +187,7 @@ app.get('/api/memory', (_req, res) => {
 
     const entries = []
     const projectDirs = readdirSync(projectsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
+      .filter(d => d.isDirectory() && isSafeName(d.name))
       .map(d => join(projectsDir, d.name))
 
     for (const pdir of projectDirs) {
@@ -180,33 +214,43 @@ app.get('/api/stats', (_req, res) => {
     const projectsDir = join(CLAUDE_DIR, 'projects')
     if (!existsSync(projectsDir)) return buildEmptyStats()
 
-    // Collect all .jsonl files
+    // Collect .jsonl files — skip oversized files, enforce safe names
     const jsonlFiles = []
     for (const entry of readdirSync(projectsDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && isSafeName(entry.name)) {
         const sub = join(projectsDir, entry.name)
         for (const f of readdirSync(sub)) {
-          if (f.endsWith('.jsonl')) jsonlFiles.push(join(sub, f))
+          if (!f.endsWith('.jsonl') || !isSafeName(f)) continue
+          const p = join(sub, f)
+          const s = statSync(p, { throwIfNoEntry: false })
+          if (s && s.size <= MAX_FILE_BYTES) jsonlFiles.push(p)
         }
       }
-      if (entry.name.endsWith('.jsonl')) {
-        jsonlFiles.push(join(projectsDir, entry.name))
+      if (entry.name.endsWith('.jsonl') && isSafeName(entry.name)) {
+        const p = join(projectsDir, entry.name)
+        const s = statSync(p, { throwIfNoEntry: false })
+        if (s && s.size <= MAX_FILE_BYTES) jsonlFiles.push(p)
       }
     }
 
     // Parse tokens by day and model, collect recent sessions
-    const byDay = {}  // { 'YYYY-MM-DD': { sonnet: N, opus: N, haiku: N, sessions: N } }
+    const byDay = {}
     const recentSessions = []
+    let totalLines = 0
 
     for (const file of jsonlFiles) {
       let sessionTs = null
       let sessionModel = null
       let sessionTok = 0
+      let fileLines = 0
 
       await new Promise(resolve => {
         const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
         rl.on('line', line => {
           if (!line.trim()) return
+          if (++fileLines > MAX_LINES_FILE || ++totalLines > MAX_LINES_TOTAL) {
+            rl.close(); return
+          }
           let msg
           try { msg = JSON.parse(line) } catch { return }
 
@@ -339,7 +383,7 @@ function buildEmptyStats() {
 }
 
 // ── Health check ─────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime(), claudeDir: CLAUDE_DIR }))
+app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: Math.floor(process.uptime()) }))
 
 // ── Static files in production ────────────────────────────────────────────────
 if (isProd) {
