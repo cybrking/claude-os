@@ -8,6 +8,8 @@
 
 ![Claude OS Overview](docs/screenshots/overview.png)
 
+![Claude OS Usage](docs/screenshots/usage.png)
+
 ---
 
 ## Features

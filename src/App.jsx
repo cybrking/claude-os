@@ -36,7 +36,7 @@ const NAV = [
   { id: 'skills',      label: 'Skills',       glyph: '✦' },
   { id: 'workflows',   label: 'Workflows',    glyph: '⟿' },
   { id: 'tasks',       label: 'Tasks & runs', glyph: '▤' },
-  { id: 'usage',       label: 'Usage & cost', glyph: '▦' },
+  { id: 'usage',       label: 'Usage',        glyph: '▦' },
   { id: 'memory',      label: 'Memory',       glyph: '❖' },
   { id: 'connections', label: 'Connections',  glyph: '⊕' },
   { id: 'schedules',   label: 'Schedules',    glyph: '◷' },
