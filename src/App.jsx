@@ -1,4 +1,4 @@
-import { useState, Component } from 'react'
+import { useState, useMemo, useRef, useEffect, Component } from 'react'
 
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null } }
@@ -18,6 +18,7 @@ class ErrorBoundary extends Component {
     return this.props.children
   }
 }
+
 import { useData } from './hooks/useData.js'
 import { Dot } from './components/ui.jsx'
 import { Overview } from './components/Overview.jsx'
@@ -29,6 +30,8 @@ import { UsageView } from './views/UsageView.jsx'
 import { MemoryView } from './views/MemoryView.jsx'
 import { ConnectionsView } from './views/ConnectionsView.jsx'
 import { SchedulesView } from './views/SchedulesView.jsx'
+import { PluginsView } from './views/PluginsView.jsx'
+import { HooksView } from './views/HooksView.jsx'
 
 const NAV = [
   { id: 'overview',    label: 'Overview',     glyph: '◇' },
@@ -39,13 +42,39 @@ const NAV = [
   { id: 'usage',       label: 'Usage',        glyph: '▦' },
   { id: 'memory',      label: 'Memory',       glyph: '❖' },
   { id: 'connections', label: 'Connections',  glyph: '⊕' },
+  { id: 'plugins',     label: 'Plugins',      glyph: '⬡' },
+  { id: 'hooks',       label: 'Hooks',        glyph: '↬' },
   { id: 'schedules',   label: 'Schedules',    glyph: '◷' },
 ]
+
+function useRelativeTime(ts) {
+  const [label, setLabel] = useState('')
+  useEffect(() => {
+    if (!ts) { setLabel(''); return }
+    const tick = () => {
+      const sec = Math.floor((Date.now() - ts) / 1000)
+      if (sec < 5) setLabel('just now')
+      else if (sec < 60) setLabel(`${sec}s ago`)
+      else setLabel(`${Math.floor(sec / 60)}m ago`)
+    }
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => clearInterval(id)
+  }, [ts])
+  return label
+}
 
 function Sidebar({ route, setRoute, data }) {
   const skillCount = data?.skills?.length || 0
   const wfCount = data?.workflows?.length || 0
-  const agentCount = data?.agents?.length || 0
+
+  // Real health check: connections with non-idle/connected status or no connections
+  const connections = data?.connections || []
+  const unhealthy = connections.filter(c => c.status === 'error' || c.status === 'down').length
+  const healthOk = unhealthy === 0
+  const healthStatus = healthOk ? 'active' : 'error'
+  const healthLabel = healthOk ? 'All systems nominal' : `${unhealthy} connection${unhealthy > 1 ? 's' : ''} down`
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -61,8 +90,8 @@ function Sidebar({ route, setRoute, data }) {
       </nav>
       <div className="sidebar-foot">
         <div className="sys-card">
-          <div className="sys-row"><Dot status="active" size={6} /> <span className="tiny">All systems nominal</span></div>
-          <div className="tiny muted">{agentCount} contexts · {skillCount} skills · {wfCount} workflows</div>
+          <div className="sys-row"><Dot status={healthStatus} size={6} /> <span className="tiny">{healthLabel}</span></div>
+          <div className="tiny muted">{skillCount} skills · {wfCount} workflows</div>
         </div>
         <div className="me">
           <span className="me-av">✻</span>
@@ -73,10 +102,59 @@ function Sidebar({ route, setRoute, data }) {
   )
 }
 
-function Topbar({ route }) {
+function SearchDropdown({ query, data, onSelect, onClose }) {
+  const results = useMemo(() => {
+    if (!query.trim() || !data) return []
+    const q = query.toLowerCase()
+    const hits = []
+
+    for (const s of (data.skills || [])) {
+      if (s.name.toLowerCase().includes(q) || s.desc?.toLowerCase().includes(q)) {
+        hits.push({ type: 'Skill', label: s.name, sub: s.desc?.slice(0, 60), route: 'skills' })
+      }
+    }
+    for (const w of (data.workflows || [])) {
+      if (w.name.toLowerCase().includes(q) || w.desc?.toLowerCase().includes(q)) {
+        hits.push({ type: 'Workflow', label: w.name, sub: w.desc?.slice(0, 60), route: 'workflows' })
+      }
+    }
+    for (const t of (data.tasks || [])) {
+      if (t.title?.toLowerCase().includes(q)) {
+        hits.push({ type: 'Task', label: t.title, sub: t.agent, route: 'tasks' })
+      }
+    }
+    for (const e of (data.memory?.entries || [])) {
+      if (e.name?.toLowerCase().includes(q) || e.desc?.toLowerCase().includes(q)) {
+        hits.push({ type: 'Memory', label: e.name, sub: e.desc?.slice(0, 60), route: 'memory' })
+      }
+    }
+    return hits.slice(0, 8)
+  }, [query, data])
+
+  if (!results.length) return null
+
+  return (
+    <div className="search-dropdown" onMouseDown={e => e.preventDefault()}>
+      {results.map((r, i) => (
+        <button key={i} className="search-result" onClick={() => { onSelect(r.route); onClose() }}>
+          <span className="search-type tiny muted">{r.type}</span>
+          <span className="search-label">{r.label}</span>
+          {r.sub && <span className="search-sub tiny muted">{r.sub}</span>}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Topbar({ route, setRoute, data, lastUpdated, refreshing, refresh }) {
   const title = (NAV.find(n => n.id === route) || NAV[0]).label
   const hour = new Date().getHours()
   const greet = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const updatedLabel = useRelativeTime(lastUpdated)
+  const inputRef = useRef(null)
+
   return (
     <header className="topbar">
       <div className="topbar-left">
@@ -85,8 +163,37 @@ function Topbar({ route }) {
           : <h1 className="hello">{title}</h1>}
       </div>
       <div className="topbar-right">
-        <div className="search"><span>⌕</span><input placeholder="Search agents, skills, runs…" /></div>
-        <button className="icon-btn" title="Notifications">◔</button>
+        <div className="search" style={{ position: 'relative' }}>
+          <span>⌕</span>
+          <input
+            ref={inputRef}
+            placeholder="Search skills, workflows, tasks…"
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setSearchOpen(true) }}
+            onFocus={() => setSearchOpen(true)}
+            onBlur={() => setTimeout(() => setSearchOpen(false), 150)}
+          />
+          {searchOpen && searchQuery && (
+            <SearchDropdown
+              query={searchQuery}
+              data={data}
+              onSelect={r => setRoute(r)}
+              onClose={() => { setSearchQuery(''); setSearchOpen(false) }}
+            />
+          )}
+        </div>
+        {lastUpdated && (
+          <span className="tiny muted" style={{ whiteSpace: 'nowrap' }}>
+            {refreshing ? 'Refreshing…' : updatedLabel}
+          </span>
+        )}
+        <button
+          className="icon-btn"
+          title="Refresh data"
+          onClick={refresh}
+          disabled={refreshing}
+          style={{ opacity: refreshing ? 0.5 : 1 }}
+        >↻</button>
       </div>
     </header>
   )
@@ -94,7 +201,7 @@ function Topbar({ route }) {
 
 export default function App() {
   const [route, setRoute] = useState('overview')
-  const { data, loading, error } = useData()
+  const { data, loading, error, lastUpdated, refreshing, refresh } = useData()
 
   if (loading && !data) {
     return (
@@ -114,6 +221,8 @@ export default function App() {
     case 'usage':       body = <UsageView data={data} />; break
     case 'memory':      body = <MemoryView data={data} />; break
     case 'connections': body = <ConnectionsView data={data} />; break
+    case 'plugins':     body = <PluginsView data={data} />; break
+    case 'hooks':       body = <HooksView data={data} />; break
     case 'schedules':   body = <SchedulesView data={data} />; break
     default:            body = <Overview data={data} />
   }
@@ -122,7 +231,14 @@ export default function App() {
     <div className="app">
       <Sidebar route={route} setRoute={setRoute} data={data} />
       <main className="main">
-        <Topbar route={route} />
+        <Topbar
+          route={route}
+          setRoute={setRoute}
+          data={data}
+          lastUpdated={lastUpdated}
+          refreshing={refreshing}
+          refresh={refresh}
+        />
         {error && !data && (
           <div style={{ padding: '8px 30px', background: 'color-mix(in oklab, var(--amber) 12%, transparent)', borderBottom: '1px solid color-mix(in oklab, var(--amber) 30%, transparent)', fontSize: '12px', color: 'var(--amber)', display: 'flex', gap: '8px', alignItems: 'center' }}>
             <span>⚠</span> API error — is the server running? <span className="mono">{error}</span>
