@@ -123,17 +123,27 @@ export function MemoryWidget({ memory }) {
 }
 
 export function Overview({ data }) {
-  const { agents, skills, workflows, tasks, connections, schedules, days, usageSeries, models, memory, spark, totalCost, todayTokens, todaySessions } = data
+  const { agents, skills, workflows, tasks, connections, schedules, days, usageSeries, models, memory, totalCost, todayTokens, todaySessions } = data
   const activeAgents = agents.filter(a => a.status === 'active').length
-  const totalMtok = usageSeries.reduce((s, d) => s + (d.sonnet || 0) + (d.opus || 0) + (d.haiku || 0), 0)
+  // Use last 14 days of the 30-day window for overview KPIs
+  const series14 = usageSeries.slice(-14)
+  const totalMtok = series14.reduce((s, d) => s + (d.sonnet || 0) + (d.opus || 0) + (d.haiku || 0), 0)
+
+  // Real sparklines from actual data
+  const normalize = arr => {
+    const max = Math.max(...arr, 0.001)
+    return arr.map(v => Math.round((v / max) * 76 + 8))
+  }
+  const tokenSpark = normalize(series14.map(d => (d.sonnet || 0) + (d.opus || 0) + (d.haiku || 0)))
+  const sessionSpark = normalize(series14.map(d => d.sessions || 0))
 
   return (
     <div className="view">
       <div className="kpi-strip">
-        <KPI label="Tokens today" value={fmt.tok(todayTokens || 0)} unit=" tok" sub="Sonnet 4.6 dominant" spark={spark(3)} />
-        <KPI label="Tokens · 14 days" value={totalMtok.toFixed(1)} unit="M" sub={`API equiv ${fmt.usd(totalCost)} (not your bill)`} spark={spark(7)} color="var(--c-sonnet)" />
-        <KPI label="Active contexts" value={`${activeAgents}`} unit={` / ${agents.length}`} sub={`${agents.length - activeAgents} idle`} spark={spark(5)} color="var(--ok)" />
-        <KPI label="Sessions today" value={todaySessions || 0} spark={spark(9)} color="var(--slate)" />
+        <KPI label="Tokens today" value={fmt.tok(todayTokens || 0)} unit=" tok" sub="Sonnet 4.6 dominant" spark={tokenSpark} />
+        <KPI label="Tokens · 14 days" value={totalMtok.toFixed(1)} unit="M" sub={`API equiv ${fmt.usd(totalCost)} (not your bill)`} spark={tokenSpark} color="var(--c-sonnet)" />
+        <KPI label="Active contexts" value={`${activeAgents}`} unit={` / ${agents.length}`} sub={`${agents.length - activeAgents} idle`} spark={sessionSpark} color="var(--ok)" />
+        <KPI label="Sessions today" value={todaySessions || 0} spark={sessionSpark} color="var(--slate)" />
       </div>
 
       <Card title="Token usage" sub="Last 14 days · stacked by model" action={<Legend models={models} />}>
