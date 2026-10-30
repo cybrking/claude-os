@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
-import { createReadStream, readdirSync, readFileSync, existsSync, statSync } from 'fs'
+import { createReadStream, readdirSync, readFileSync, existsSync, statSync, realpathSync } from 'fs'
 import { join, resolve, basename } from 'path'
 import { homedir } from 'os'
 import { createInterface } from 'readline'
@@ -36,8 +36,15 @@ function isSafeName(name) {
 }
 
 // ── Safe path guard: must stay within CLAUDE_DIR ──────────────────────────────
+// Resolves symlinks before checking so a symlinked file/dir pointing outside
+// CLAUDE_DIR can't pass a purely lexical prefix check.
 function isSafePath(resolvedPath) {
-  return resolvedPath.startsWith(CLAUDE_DIR + '/')
+  if (!resolvedPath.startsWith(CLAUDE_DIR + '/')) return false
+  try {
+    return realpathSync(resolvedPath).startsWith(realpathSync(CLAUDE_DIR) + '/')
+  } catch {
+    return false
+  }
 }
 
 const app = express()
@@ -331,7 +338,10 @@ app.get('/api/memory', (req, res) => {
       for (const line of lines) {
         const m = line.match(/\- \[([^\]]+)\]\(([^)]+)\)\s*[—–-]\s*(.*)/)
         if (m) {
-          entries.push({ name: m[1], file: m[2], desc: m[3], type: 'memory', project })
+          // Drop any #anchor fragment — the file-content endpoint serves
+          // the whole file and only accepts bare .md names.
+          const file = m[2].split('#')[0]
+          entries.push({ name: m[1], file, desc: m[3], type: 'memory', project })
         }
       }
     }
@@ -350,6 +360,8 @@ app.get('/api/memory/:project/:file', (req, res) => {
   const filePath = resolve(join(CLAUDE_DIR, 'projects', project, 'memory', file))
   if (!isSafePath(filePath)) return res.status(403).json({ error: 'forbidden' })
   if (!existsSync(filePath)) return res.status(404).json({ error: 'not found' })
+  const stat = statSync(filePath, { throwIfNoEntry: false })
+  if (stat && stat.size > MAX_FILE_BYTES) return res.status(413).json({ error: 'file too large' })
   res.json({ content: safeRead(filePath) })
 })
 
