@@ -548,7 +548,10 @@ if (isProd) {
   app.get('*', (_req, res) => res.sendFile(join(distDir, 'index.html')))
 }
 
-const server = app.listen(PORT, () => {
+// Bind to loopback only — without an explicit host, Node listens on all
+// interfaces (0.0.0.0/::), contradicting the "localhost-only, no external
+// network access" security model documented in SECURITY.md.
+const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`Claude OS running at http://localhost:${PORT}`)
   console.log(`Reading from: ${CLAUDE_DIR}`)
 })
