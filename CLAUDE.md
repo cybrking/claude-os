@@ -63,8 +63,13 @@ CLAUDE_DIR=/path/to/.claude npm start
 | Endpoint | Reads |
 |----------|-------|
 | `GET /api/stats` | `~/.claude/projects/*/...jsonl` — token counts by day/model, sessions, cost |
+| `GET /api/sessions` | `~/.claude/sessions/*.json` — active/recent session metadata |
 | `GET /api/skills` | `~/.claude/skills/*/SKILL.md` — name + description from frontmatter |
 | `GET /api/workflows` | `~/.claude/workflows/*.js` — name + description from `export const meta` |
+| `GET /api/plugins` | `~/.claude/plugins/installed_plugins.json` — installed plugin list |
+| `GET /api/hooks` | `~/.claude/hooks/*`, `settings.json` — hook scripts + event bindings |
+| `GET /api/settings` | `~/.claude/settings.json` — model/theme/permission summary |
 | `GET /api/connections` | `~/.claude/mcp-needs-auth-cache.json` — MCP server list + auth status |
 | `GET /api/memory` | `~/.claude/projects/*/memory/MEMORY.md` — memory entry index |
+| `GET /api/memory/:project/:file` | `~/.claude/projects/*/memory/*.md` — single memory file's content |
 | `GET /health` | — | Server status + uptime |

@@ -68,12 +68,12 @@ function Sidebar({ route, setRoute, data }) {
   const skillCount = data?.skills?.length || 0
   const wfCount = data?.workflows?.length || 0
 
-  // Real health check: connections with non-idle/connected status or no connections
+  // Real health check: connections that aren't 'connected' (e.g. 'idle' = needs auth)
   const connections = data?.connections || []
-  const unhealthy = connections.filter(c => c.status === 'error' || c.status === 'down').length
+  const unhealthy = connections.filter(c => c.status !== 'connected').length
   const healthOk = unhealthy === 0
   const healthStatus = healthOk ? 'active' : 'error'
-  const healthLabel = healthOk ? 'All systems nominal' : `${unhealthy} connection${unhealthy > 1 ? 's' : ''} down`
+  const healthLabel = healthOk ? 'All systems nominal' : `${unhealthy} connection${unhealthy > 1 ? 's' : ''} need${unhealthy > 1 ? '' : 's'} auth`
 
   return (
     <aside className="sidebar">

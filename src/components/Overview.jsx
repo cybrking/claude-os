@@ -147,7 +147,7 @@ export function Overview({ data }) {
       </div>
 
       <Card title="Token usage" sub="Last 14 days · stacked by model" action={<Legend models={models} />}>
-        <StackedBars series={usageSeries} labels={days} models={models} h={210} />
+        <StackedBars series={series14} labels={days.slice(-14)} models={models} h={210} />
       </Card>
 
       <div className="grid g-2">

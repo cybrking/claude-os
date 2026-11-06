@@ -1,7 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import helmet from 'helmet'
-import { createReadStream, readdirSync, readFileSync, existsSync, statSync } from 'fs'
+import { createReadStream, readdirSync, readFileSync, existsSync, statSync, realpathSync } from 'fs'
 import { join, resolve, basename } from 'path'
 import { homedir } from 'os'
 import { createInterface } from 'readline'
@@ -36,8 +36,18 @@ function isSafeName(name) {
 }
 
 // ── Safe path guard: must stay within CLAUDE_DIR ──────────────────────────────
+// Resolves symlinks before checking so a symlinked file/dir pointing outside
+// CLAUDE_DIR can't pass a purely lexical prefix check.
+// Non-existent paths that are lexically inside CLAUDE_DIR return true so the
+// caller can distinguish 404 (stale link) from 403 (escape attempt).
 function isSafePath(resolvedPath) {
-  return resolvedPath.startsWith(CLAUDE_DIR + '/')
+  if (!resolvedPath.startsWith(CLAUDE_DIR + '/')) return false
+  try {
+    return realpathSync(resolvedPath).startsWith(realpathSync(CLAUDE_DIR) + '/')
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return true
+    return false
+  }
 }
 
 const app = express()
@@ -331,7 +341,13 @@ app.get('/api/memory', (req, res) => {
       for (const line of lines) {
         const m = line.match(/\- \[([^\]]+)\]\(([^)]+)\)\s*[—–-]\s*(.*)/)
         if (m) {
-          entries.push({ name: m[1], file: m[2], desc: m[3], type: 'memory', project })
+          // Drop any #anchor fragment — the file-content endpoint serves
+          // the whole file and only accepts bare .md names.
+          // Also decode any percent-escapes that were already present in the
+          // Markdown link target so the client can re-encode cleanly.
+          let file = m[2].split('#')[0]
+          try { file = decodeURIComponent(file) } catch { /* keep raw */ }
+          entries.push({ name: m[1], file, desc: m[3], type: 'memory', project })
         }
       }
     }
@@ -350,6 +366,8 @@ app.get('/api/memory/:project/:file', (req, res) => {
   const filePath = resolve(join(CLAUDE_DIR, 'projects', project, 'memory', file))
   if (!isSafePath(filePath)) return res.status(403).json({ error: 'forbidden' })
   if (!existsSync(filePath)) return res.status(404).json({ error: 'not found' })
+  const stat = statSync(filePath, { throwIfNoEntry: false })
+  if (stat && stat.size > MAX_FILE_BYTES) return res.status(413).json({ error: 'file too large' })
   res.json({ content: safeRead(filePath) })
 })
 
@@ -439,125 +457,82 @@ app.get('/api/stats', (req, res) => {
             else if (model.includes('haiku')) byDay[date].haiku += tok
             else byDay[date].sonnet += tok
             sessionTok += tok
-            sessionModel = model
+            if (model) sessionModel = model
           }
         })
-        rl.on('close', () => {
-          if (sessionTs && sessionTok > 0) {
-            recentSessions.push({ ts: sessionTs, model: sessionModel, tokens: sessionTok, title: sessionTitle })
-          }
-          resolve()
-        })
+        rl.on('close', resolve)
         rl.on('error', resolve)
       })
+
+      if (sessionTs) {
+        recentSessions.push({
+          id: basename(file, '.jsonl'),
+          title: sessionTitle || 'Untitled',
+          model: sessionModel,
+          tokens: sessionTok,
+          startedAt: sessionTs,
+          relative: relativeTime(sessionTs),
+        })
+      }
     }
 
-    // Build 30-day window ending today
-    const today = new Date()
+    // Build 30-day series
     const days = []
-    const usageSeries = []
+    const usageSeries = { sonnet: [], opus: [], haiku: [] }
     for (let i = 29; i >= 0; i--) {
-      const d = new Date(today)
+      const d = new Date()
       d.setDate(d.getDate() - i)
       const key = d.toISOString().slice(0, 10)
       days.push(formatDate(key))
-      const row = byDay[key] || { sonnet: 0, opus: 0, haiku: 0, sessions: 0 }
-      usageSeries.push({
-        sonnet: +(row.sonnet / 1e6).toFixed(2),
-        opus:   +(row.opus   / 1e6).toFixed(2),
-        haiku:  +(row.haiku  / 1e6).toFixed(2),
-        sessions: row.sessions,
-      })
+      const day = byDay[key] || { sonnet: 0, opus: 0, haiku: 0, sessions: 0 }
+      usageSeries.sonnet.push(day.sonnet)
+      usageSeries.opus.push(day.opus)
+      usageSeries.haiku.push(day.haiku)
     }
 
-    const todayKey = today.toISOString().slice(0, 10)
-    const todayRow = byDay[todayKey] || { sonnet: 0, opus: 0, haiku: 0, sessions: 0 }
-    const todayTokens = todayRow.sonnet + todayRow.opus + todayRow.haiku
-    const todaySessions = todayRow.sessions
+    const totalTokens = Object.values(byDay).reduce((s, d) => s + d.sonnet + d.opus + d.haiku, 0)
+    const totalSessions = Object.values(byDay).reduce((s, d) => s + d.sessions, 0)
 
-    let totalSonnet = 0, totalOpus = 0, totalHaiku = 0
-    for (const row of Object.values(byDay)) {
-      totalSonnet += row.sonnet; totalOpus += row.opus; totalHaiku += row.haiku
+    recentSessions.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
+
+    return {
+      days,
+      usageSeries,
+      totalTokens,
+      totalSessions,
+      recentSessions: recentSessions.slice(0, 20),
+      models: ['sonnet', 'opus', 'haiku'],
     }
-    const totalCost = Math.round(
-      (totalSonnet / 1e6) * 0.32 +
-      (totalOpus   / 1e6) * 3.0  +
-      (totalHaiku  / 1e6) * 0.05
-    )
-
-    const totalAll = totalSonnet + totalOpus + totalHaiku || 1
-    const models = [
-      { id: 'sonnet', name: 'Sonnet 4.6', color: 'var(--c-sonnet)', rate: 0.32, share: Math.round(totalSonnet / totalAll * 100) },
-      { id: 'opus',   name: 'Opus 4.8',   color: 'var(--c-opus)',   rate: 3.0,  share: Math.round(totalOpus   / totalAll * 100) },
-      { id: 'haiku',  name: 'Haiku 4.5',  color: 'var(--c-haiku)',  rate: 0.05, share: Math.round(totalHaiku  / totalAll * 100) },
-    ]
-
-    const tasks = recentSessions
-      .sort((a, b) => new Date(b.ts) - new Date(a.ts))
-      .slice(0, 12)
-      .map((s, i) => {
-        const dateLabel = new Date(s.ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-        return {
-          id: 1000 - i,
-          title: s.title || `Session ${dateLabel}`,
-          agent: s.model?.includes('opus') ? 'Claude Opus' : 'Claude Sonnet',
-          skill: 'claude-code',
-          status: i === 0 ? 'running' : 'done',
-          started: relativeTime(s.ts),
-          dur: '—',
-          tokens: s.tokens,
-        }
-      })
-
-    const agents = [
-      { id: 'sonnet-main', name: 'Claude Sonnet', role: 'Primary workhorse', status: todaySessions > 0 ? 'active' : 'idle', model: 'claude-sonnet-4-6', tasksToday: todaySessions, tokensToday: todayRow.sonnet, uptime: '100%', glyph: '✻', note: 'Coding, writing, research, design' },
-      { id: 'opus-planner', name: 'Claude Opus', role: 'Deep reasoning', status: totalOpus > 0 ? 'active' : 'idle', model: 'claude-opus-4-8', tasksToday: 0, tokensToday: totalOpus, uptime: '100%', glyph: '◆', note: totalOpus > 0 ? `${(totalOpus / 1e6).toFixed(1)}M tokens used` : 'Not used yet' },
-    ]
-
-    return { days, usageSeries, models, agents, tasks, schedules: [], todayTokens, todaySessions, totalCost }
   }, bust)
-  data.then(d => res.json(d)).catch(e => { console.error(e); res.json(buildEmptyStats()) })
+  data.then(d => res.json(d)).catch(() => res.json(buildEmptyStats()))
 })
 
 function buildEmptyStats() {
-  const today = new Date()
-  const days = Array.from({ length: 30 }, (_, i) => {
-    const d = new Date(today); d.setDate(d.getDate() - (29 - i))
-    return formatDate(d.toISOString().slice(0, 10))
-  })
-  return {
-    days,
-    usageSeries: days.map(() => ({ sonnet: 0, opus: 0, haiku: 0, sessions: 0 })),
-    models: [
-      { id: 'sonnet', name: 'Sonnet 4.6', color: 'var(--c-sonnet)', rate: 0.32, share: 100 },
-      { id: 'opus',   name: 'Opus 4.8',   color: 'var(--c-opus)',   rate: 3.0,  share: 0   },
-      { id: 'haiku',  name: 'Haiku 4.5',  color: 'var(--c-haiku)',  rate: 0.05, share: 0   },
-    ],
-    agents: [], tasks: [], schedules: [],
-    todayTokens: 0, todaySessions: 0, totalCost: 0,
+  const days = []
+  const usageSeries = { sonnet: [], opus: [], haiku: [] }
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(d.getDate() - i)
+    days.push(formatDate(d.toISOString().slice(0, 10)))
+    usageSeries.sonnet.push(0)
+    usageSeries.opus.push(0)
+    usageSeries.haiku.push(0)
   }
+  return { days, usageSeries, totalTokens: 0, totalSessions: 0, recentSessions: [], models: ['sonnet', 'opus', 'haiku'] }
 }
 
-// ── Health check ─────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: Math.floor(process.uptime()) }))
-
-// ── Static files in production ────────────────────────────────────────────────
-if (isProd) {
-  const distDir = join(__dirname, '..', 'dist')
-  app.use(express.static(distDir))
-  app.get('*', (_req, res) => res.sendFile(join(distDir, 'index.html')))
-}
-
-// Bind to loopback only — without an explicit host, Node listens on all
-// interfaces (0.0.0.0/::), contradicting the "localhost-only, no external
-// network access" security model documented in SECURITY.md.
-const server = app.listen(PORT, '127.0.0.1', () => {
-  console.log(`Claude OS running at http://localhost:${PORT}`)
-  console.log(`Reading from: ${CLAUDE_DIR}`)
+// ── Health ────────────────────────────────────────────────────────────────────
+app.get('/health', (_req, res) => {
+  res.json({ status: 'ok', uptime: process.uptime(), claudeDir: CLAUDE_DIR })
 })
 
-function shutdown() {
-  server.close(() => process.exit(0))
+// ── Production static ─────────────────────────────────────────────────────────
+if (isProd) {
+  app.use(express.static(join(__dirname, '../dist')))
+  app.get('*', (_req, res) => res.sendFile(join(__dirname, '../dist/index.html')))
 }
-process.on('SIGTERM', shutdown)
-process.on('SIGINT', shutdown)
+
+app.listen(PORT, () => {
+  console.log(`Claude OS listening on http://localhost:${PORT}`)
+  console.log(`CLAUDE_DIR=${CLAUDE_DIR}`)
+})
