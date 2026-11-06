@@ -19,6 +19,8 @@ function MemoryEntry({ entry }) {
     if (!expanded && content === null) {
       setLoading(true)
       try {
+        // entry.file is already normalized (decoded) by the server index route.
+        // Encode only for the URL segment so spaces and reserved chars are safe.
         const r = await fetch(`/api/memory/${encodeURIComponent(entry.project)}/${encodeURIComponent(entry.file)}`)
         if (r.ok) {
           const { content: text } = await r.json()
