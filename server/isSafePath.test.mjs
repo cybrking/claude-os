@@ -1,4 +1,4 @@
-// Minimal assert-based check for isSafePath's symlink handling.
+// Minimal assert-based check for isSafePath's symlink + missing-file handling.
 // Run: node server/isSafePath.test.mjs
 import assert from 'node:assert'
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, writeFileSync, realpathSync } from 'node:fs'
@@ -18,7 +18,10 @@ function isSafePath(resolvedPath, CLAUDE_DIR) {
   if (!resolvedPath.startsWith(CLAUDE_DIR + '/')) return false
   try {
     return realpathSync(resolvedPath).startsWith(realpathSync(CLAUDE_DIR) + '/')
-  } catch {
+  } catch (err) {
+    // Non-existent paths that are lexically inside are treated as safe so the
+    // route can return 404 instead of 403.
+    if (err && err.code === 'ENOENT') return true
     return false
   }
 }
@@ -33,8 +36,11 @@ const realFile = join(claudeDir, 'real.md')
 writeFileSync(realFile, 'fine')
 assert.strictEqual(isSafePath(realFile, claudeDir), true, 'real file inside CLAUDE_DIR must be accepted')
 
-// A nonexistent path must be rejected, not throw.
-assert.strictEqual(isSafePath(join(claudeDir, 'missing.md'), claudeDir), false, 'nonexistent path must be rejected, not throw')
+// A nonexistent path that is lexically inside must be accepted (route returns 404).
+assert.strictEqual(isSafePath(join(claudeDir, 'missing.md'), claudeDir), true, 'nonexistent lexical-safe path must be accepted so route can 404')
+
+// A path that is clearly outside must be rejected.
+assert.strictEqual(isSafePath(join(outside, 'secret.md'), claudeDir), false, 'path outside CLAUDE_DIR must be rejected')
 
 rmSync(root, { recursive: true, force: true })
 console.log('isSafePath: all checks passed')
